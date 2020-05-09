@@ -104,7 +104,7 @@ int             pipewrite(struct pipe*, char*, int);
 //PAGEBREAK: 16
 // proc.c
 int             cpuid(void);
-void            exit(void);
+void            exit(int);
 int             fork(void);
 int             growproc(int);
 int             kill(int);
@@ -117,9 +117,15 @@ void            sched(void);
 void            setproc(struct proc*);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
-int             wait(void);
+int             wait(int*);
 void            wakeup(void*);
 void            yield(void);
+//@@ Setter for accumulator function (new process and blocked process)
+void            set_accumulator(struct proc*);
+//@@ Update proc times (every clock tick) 
+void 			update_proc_times(void);
+//@@ Getter for the ratio time of a process
+float			get_ratio_time(struct proc*);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
@@ -188,3 +194,5 @@ void            clearpteu(pde_t *pgdir, char *uva);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+int sched_type;

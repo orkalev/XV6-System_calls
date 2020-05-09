@@ -2,9 +2,17 @@ struct stat;
 struct rtcdate;
 
 // system calls
+//@@ System calls for the user
+int memsize(void);
+int set_ps_priority(int);
+int set_cfs_priority(int);
+int policy(int);
+int proc_info(struct perf*);
+//@@ End System calls for the user
+
 int fork(void);
-int exit(void) __attribute__((noreturn));
-int wait(void);
+int exit(int) __attribute__((noreturn));
+int wait(int*);
 int pipe(int*);
 int write(int, const void*, int);
 int read(int, void*, int);

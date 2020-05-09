@@ -7,6 +7,8 @@
 #include "proc.h"
 #include "spinlock.h"
 
+enum scheduling_policy{defualt_policy, priority_scheduling, CFS};
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -88,7 +90,14 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  //@@ Set the new proces's priority and accumulator.
+  p->ps_priority = 5;
+  set_accumulator(p);
+  //Task 4.2
+  //@@ 
+  p->cfs_priority = 2;
 
+  
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -198,6 +207,8 @@ fork(void)
   }
   np->sz = curproc->sz;
   np->parent = curproc;
+  //@@ Copy the cfs_priority of the parent
+  np->cfs_priority = curproc->cfs_priority;
   *np->tf = *curproc->tf;
 
   // Clear %eax so that fork returns 0 in the child.
@@ -223,9 +234,9 @@ fork(void)
 
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
-// until its parent calls wait() to find out it exited.
+// until its parent calls wait(*int) to find out it exited.
 void
-exit(void)
+exit(int status)
 {
   struct proc *curproc = myproc();
   struct proc *p;
@@ -246,10 +257,11 @@ exit(void)
   iput(curproc->cwd);
   end_op();
   curproc->cwd = 0;
+  curproc->status = status;
 
   acquire(&ptable.lock);
 
-  // Parent might be sleeping in wait().
+  // Parent might be sleeping in wait(*int).
   wakeup1(curproc->parent);
 
   // Pass abandoned children to init.
@@ -270,7 +282,7 @@ exit(void)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(void)
+wait(int *status)
 {
   struct proc *p;
   int havekids, pid;
@@ -287,6 +299,8 @@ wait(void)
       if(p->state == ZOMBIE){
         // Found one.
         pid = p->pid;
+        if(status != null)
+          *status = p->status;
         kfree(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
@@ -323,6 +337,7 @@ void
 scheduler(void)
 {
   struct proc *p;
+  struct proc *temp_p; //TODOC highest priority process
   struct cpu *c = mycpu();
   c->proc = 0;
   
@@ -330,11 +345,41 @@ scheduler(void)
     // Enable interrupts on this processor.
     sti();
 
+    struct proc *next_proc = null; //TODOC
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+      switch(sched_type){
+        case(priority_scheduling):
+            //@@ Task 4.2
+            next_proc = p; // Initialize with the first runnable process found.
+            for(temp_p = ptable.proc; temp_p < &ptable.proc[NPROC]; temp_p++){
+              if(temp_p->state != RUNNABLE)
+                continue;
+              if(next_proc->accumulator > temp_p->accumulator)
+                next_proc = temp_p;
+            }
+            p = next_proc;
+            break;
+
+        case(CFS):
+            next_proc = p; // Initialize with the first runnable process found.
+            for(temp_p = ptable.proc; temp_p < &ptable.proc[NPROC]; temp_p++){
+              if(temp_p->state != RUNNABLE)
+                continue;
+            if(get_ratio_time(next_proc) > get_ratio_time(temp_p))
+              next_proc = temp_p;
+            }
+            p = next_proc;
+            break;
+
+        default:
+          ;
+      //finsh Task 4.2
+}
+
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -385,8 +430,12 @@ sched(void)
 void
 yield(void)
 {
+  struct proc *p = myproc();
+
   acquire(&ptable.lock);  //DOC: yieldlock
-  myproc()->state = RUNNABLE;
+  p->state = RUNNABLE;
+  // when finished running, the proces's acuumulator increases with its priority value
+  p->accumulator += p->ps_priority; 
   sched();
   release(&ptable.lock);
 }
@@ -460,8 +509,10 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+      set_accumulator(p);
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -532,3 +583,70 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+//@@ Set the accumulator for a new and blocked processes.
+void
+set_accumulator(struct proc* myproc){
+    long long min_accumulator = 0; // The accumulator is 0 in case there are no other processes
+    struct proc *p;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+       if(p->state == RUNNING || p->state == RUNNABLE){
+        min_accumulator = p->accumulator;
+        break;
+       }
+    }
+
+    for(p = ptable.proc; p < &ptable.proc[NPROC] && min_accumulator > 0; p++){
+       if((p->state == RUNNING || p->state == RUNNABLE) && min_accumulator > p->accumulator ){
+         min_accumulator = p->accumulator;
+       }
+    }
+    myproc->accumulator = min_accumulator;
+}
+
+//@@ Set the accumulator for a new and blocked processes.
+void
+update_proc_times(){
+  struct proc *p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    switch(p->state){
+      case SLEEPING:
+        p->stime++;
+        break;
+
+      case RUNNABLE:
+        p->retime++;
+        break;
+
+      case RUNNING:
+        p->rtime++;
+        break;
+
+      default:
+      break;
+    }
+  }
+  release(&ptable.lock);
+}
+
+//@@ Returns the Rtime for a process. ratio_time = (rtime*d_factor)/(rtime+wtime) (wtime = retime+stime)  
+float
+get_ratio_time(struct proc* p){
+  int wtime = p->retime+p->stime;
+  float d_factor = 1 ;
+  switch(p->cfs_priority) {
+    case 1:
+      d_factor = 0.75;
+      break;
+    case 2:
+      d_factor = 1;
+      break;
+    case 3:
+      d_factor = 1.25;
+      break;
+    default:
+      break;
+  }
+  return (p->rtime*d_factor)/(p->rtime+wtime);
+} 
